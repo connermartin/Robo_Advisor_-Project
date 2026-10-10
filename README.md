@@ -13,3 +13,12 @@ cp .env.example .env             # optional: add free Finnhub / FRED keys
 streamlit run app.py
 python -m pytest                 # run tests
 ```
+
+## Offline sample data
+`data/sample_prices.csv` is the fallback used when Yahoo Finance can't be reached.
+The committed copy is **synthetic** (see `data/sample_prices_meta.json`). To replace it
+with real prices, run this once with internet access:
+```bash
+python scripts/build_sample_data.py              # real yfinance prices
+python scripts/build_sample_data.py --synthetic  # regenerate synthetic data
+```

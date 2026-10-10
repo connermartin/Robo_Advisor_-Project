@@ -6,7 +6,15 @@ Run with:  streamlit run app.py
 
 import streamlit as st
 
-from src.portfolios import MAX_TILT, allocation_table, get_weights
+from src.data_fetch import (
+    SRC_LIVE,
+    SRC_SAMPLE,
+    clear_caches,
+    get_price_history,
+    get_quotes,
+    get_risk_free_rate,
+)
+from src.portfolios import ALL_TICKERS, MAX_TILT, allocation_table, get_weights
 from src.questionnaire import (
     MAX_AGE,
     MAX_HORIZON,
@@ -61,12 +69,70 @@ def sidebar_questionnaire() -> tuple:
     return age, horizon, answers, tilt
 
 
+def load_data() -> dict:
+    """Load prices, risk-free rate and quotes (cached, with fallbacks).
+
+    Returns a dict with keys prices, rf, quotes (each a FetchResult or None) and
+    errors (list of messages for sources with no usable fallback).
+    """
+    data = {"prices": None, "rf": None, "quotes": None, "errors": []}
+    try:
+        data["prices"] = get_price_history(tuple(ALL_TICKERS))
+    except Exception as exc:  # last-resort guard: the app must never crash
+        data["errors"].append(f"Historical prices are unavailable: {exc}")
+
+    try:
+        data["rf"] = get_risk_free_rate()
+    except Exception as exc:
+        data["errors"].append(f"Risk-free rate is unavailable: {exc}")
+
+    # Only fall back to historical closes as "current price" if they are real prices.
+    prices = data["prices"]
+    is_synthetic = prices is not None and prices.source == SRC_SAMPLE and "SYNTHETIC" in prices.detail
+    last_closes = prices.data.iloc[-1] if prices is not None and not is_synthetic else None
+    try:
+        data["quotes"] = get_quotes(tuple(ALL_TICKERS), last_closes)
+    except Exception as exc:
+        data["errors"].append(f"Current quotes are unavailable: {exc}")
+    return data
+
+
+def show_data_status(data: dict) -> None:
+    """Sidebar panel with each source's status, plus one combined warning in the main area."""
+    st.sidebar.subheader("Data")
+    if st.sidebar.button("🔄 Refresh data", help="Clear cached results and call the APIs again."):
+        clear_caches()
+        st.rerun()
+
+    with st.sidebar.expander("Data sources", expanded=False):
+        for label, key in [("Prices", "prices"), ("Risk-free rate", "rf"), ("Quotes", "quotes")]:
+            res = data[key]
+            if res is None:
+                st.markdown(f"❌ **{label}:** unavailable")
+            else:
+                icon = "✅" if res.source == SRC_LIVE else "⚠️"
+                st.markdown(f"{icon} **{label}:** {res.source} — {res.detail}")
+        prices = data["prices"]
+        if prices is not None:
+            idx = prices.data.index
+            st.caption(f"Price history: {idx[0].date()} to {idx[-1].date()} ({len(idx)} trading days)")
+
+    for msg in data["errors"]:
+        st.error(msg)
+    notes = [w for key in ("prices", "rf", "quotes") if data[key] for w in data[key].warnings]
+    if notes:
+        st.warning("**Data notice — some live data is unavailable, so fallbacks are in use:**\n"
+                   + "\n".join(f"- {n}" for n in notes))
+
+
 def main() -> None:
     st.title("📈 AI Robo-Advisor & Portfolio Recommendation Tool")
     st.warning(DISCLAIMER)
 
     age, horizon, answer_labels, tilt = sidebar_questionnaire()
     answer_points = labels_to_points(answer_labels)
+    data = load_data()
+    show_data_status(data)
 
     tab_mine, tab_compare, tab_assumptions = st.tabs(
         ["My Portfolio", "Compare Profiles", "Assumptions & Methodology"]
@@ -93,7 +159,19 @@ def main() -> None:
 
             st.subheader(f"Hypothetical {result.profile} allocation")
             weights = get_weights(result.profile, tilt)
-            st.dataframe(allocation_table(weights), hide_index=True, width="stretch")
+            table = allocation_table(weights)
+            if data["quotes"] is not None:
+                q = data["quotes"].data
+                table["Current Price ($)"] = table["Ticker"].map(q["price"]).round(2)
+                table["Price Source"] = table["Ticker"].map(q["source"])
+            st.dataframe(table, hide_index=True, width="stretch",
+                         column_config={"Current Price ($)": st.column_config.NumberColumn(format="$%.2f")})
+
+            if data["rf"] is not None:
+                rf = data["rf"]
+                st.metric("Risk-free rate (3-month T-bill)", f"{rf.data:.2%}", help=rf.detail)
+                if rf.source != SRC_LIVE:
+                    st.caption(f"Risk-free rate source: {rf.source} ({rf.detail}).")
             st.caption("Charts, expected return and risk metrics arrive in later stages.")
 
     with tab_compare:

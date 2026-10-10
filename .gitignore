@@ -13,3 +13,4 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+data/cache/
