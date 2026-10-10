@@ -12,13 +12,19 @@ from src import charts
 from src.data_fetch import (
     LOOKBACK_YEARS,
     SRC_LIVE,
-    SRC_SAMPLE,
     clear_caches,
     get_price_history,
     get_quotes,
     get_risk_free_rate,
 )
-from src.portfolios import ALL_TICKERS, ETF_INFO, MAX_TILT, MODEL_PORTFOLIOS, allocation_table, get_weights
+from src.portfolios import (
+    ALL_TICKERS,
+    ETF_INFO,
+    MAX_TILT,
+    MODEL_PORTFOLIOS,
+    allocation_table,
+    get_weights,
+)
 from src.questionnaire import (
     DEFAULT_INVESTMENT,
     MAX_AGE,
@@ -84,6 +90,13 @@ def sidebar_questionnaire() -> tuple:
     return age, horizon, answers, tilt, investment
 
 
+def sidebar_footer() -> None:
+    """Short disclaimer at the bottom of the sidebar, visible on every tab."""
+    st.sidebar.divider()
+    st.sidebar.caption("⚠️ Educational illustration only — not investment advice. "
+                       "Hypothetical portfolios; past performance does not predict future results.")
+
+
 def load_data() -> dict:
     """Load prices, risk-free rate and quotes (cached, with fallbacks).
 
@@ -103,8 +116,7 @@ def load_data() -> dict:
 
     # Only fall back to historical closes as "current price" if they are real prices.
     prices = data["prices"]
-    is_synthetic = prices is not None and prices.source == SRC_SAMPLE and "SYNTHETIC" in prices.detail
-    last_closes = prices.data.iloc[-1] if prices is not None and not is_synthetic else None
+    last_closes = prices.data.iloc[-1] if prices is not None and not prices.synthetic else None
     try:
         data["quotes"] = get_quotes(tuple(ALL_TICKERS), last_closes)
     except Exception as exc:
@@ -138,6 +150,7 @@ def show_data_status(data: dict) -> None:
     if notes:
         st.warning("**Data notice — some live data is unavailable, so fallbacks are in use:**\n"
                    + "\n".join(f"- {n}" for n in notes))
+
 
 def theme_mode() -> str:
     """'dark' or 'light', following the viewer's Streamlit theme (light if unknown)."""
@@ -175,7 +188,7 @@ def show_risk_return(data: dict, result: RiskResult, weights: dict, tilt: int,
         return
 
     prices = data["prices"]
-    if prices.source == SRC_SAMPLE and "SYNTHETIC" in prices.detail:
+    if prices.synthetic:
         st.caption("⚠️ Figures below are computed from SYNTHETIC sample prices, not real ETF history.")
 
     m = an.portfolio_metrics(prices.data, weights, rf)
@@ -303,7 +316,8 @@ def show_compare(data: dict, mode: str) -> None:
             pm = all_m[res.profile]
             col.update({
                 "Expected return": pct(pm.expected_return), "Volatility": pct(pm.volatility),
-                "Sharpe ratio": f"{pm.sharpe:.2f}", "Max drawdown": pct(pm.max_drawdown),
+                "Sharpe ratio": "n/a" if pm.sharpe != pm.sharpe else f"{pm.sharpe:.2f}",
+                "Max drawdown": pct(pm.max_drawdown),
             })
         rows[COMPARE_DEFAULTS[key]["label"]] = col
     st.dataframe(pd.DataFrame(rows), width="stretch")
@@ -396,6 +410,7 @@ def main() -> None:
     answer_points = labels_to_points(answer_labels)
     data = load_data()
     show_data_status(data)
+    sidebar_footer()
     mode = theme_mode()
 
     tab_mine, tab_compare, tab_assumptions = st.tabs(

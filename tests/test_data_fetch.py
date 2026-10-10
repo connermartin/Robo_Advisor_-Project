@@ -106,6 +106,7 @@ def test_price_history_falls_back_to_sample_csv(monkeypatch):
                         lambda t, y: (_ for _ in ()).throw(ConnectionError("offline")))
     res = df_mod.fetch_price_history(ALL_TICKERS)
     assert res.source == df_mod.SRC_SAMPLE
+    assert res.synthetic  # the committed sample CSV is synthetic
     assert list(res.data.columns) == ALL_TICKERS
     assert any("Yahoo Finance" in w for w in res.warnings)
 

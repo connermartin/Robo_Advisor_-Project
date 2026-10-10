@@ -64,6 +64,7 @@ class FetchResult:
     source: str
     detail: str = ""
     warnings: list[str] = field(default_factory=list)
+    synthetic: bool = False  # True when the data is randomly generated sample data
 
 
 # --------------------------------------------------------------------------- keys
@@ -217,7 +218,7 @@ def fetch_price_history(tickers: list[str], years: int = LOOKBACK_YEARS) -> Fetc
             f"Using bundled sample prices saved from yfinance ({meta.get('description', '')})."
         )
         detail = f"bundled yfinance snapshot ({meta.get('description', '')})"
-    return FetchResult(prices, SRC_SAMPLE, detail, warnings)
+    return FetchResult(prices, SRC_SAMPLE, detail, warnings, synthetic=meta.get("synthetic", True))
 
 
 # ------------------------------------------------------------- risk-free rate
