@@ -4,9 +4,11 @@ This file only handles layout and widgets; all logic lives in ``src/``.
 Run with:  streamlit run app.py
 """
 
+import pandas as pd
 import streamlit as st
 
 from src import analytics as an
+from src import charts
 from src.data_fetch import (
     LOOKBACK_YEARS,
     SRC_LIVE,
@@ -16,7 +18,7 @@ from src.data_fetch import (
     get_quotes,
     get_risk_free_rate,
 )
-from src.portfolios import ALL_TICKERS, MAX_TILT, allocation_table, get_weights
+from src.portfolios import ALL_TICKERS, ETF_INFO, MAX_TILT, MODEL_PORTFOLIOS, allocation_table, get_weights
 from src.questionnaire import (
     DEFAULT_INVESTMENT,
     MAX_AGE,
@@ -31,7 +33,7 @@ from src.questionnaire import (
     validate_inputs,
     validate_investment,
 )
-from src.risk_profile import assess_risk
+from src.risk_profile import RiskResult, assess_risk
 
 DISCLAIMER = (
     "**Educational illustration only — not investment advice.** This tool uses hypothetical "
@@ -137,12 +139,32 @@ def show_data_status(data: dict) -> None:
         st.warning("**Data notice — some live data is unavailable, so fallbacks are in use:**\n"
                    + "\n".join(f"- {n}" for n in notes))
 
+def theme_mode() -> str:
+    """'dark' or 'light', following the viewer's Streamlit theme (light if unknown)."""
+    try:
+        return "dark" if st.context.theme.type == "dark" else "light"
+    except Exception:  # older Streamlit or no browser context
+        return "light"
+
+
+def plot(fig) -> None:
+    """Display a Plotly figure full-width with Streamlit's theme."""
+    st.plotly_chart(fig, theme="streamlit", width="stretch", config={"displaylogo": False})
+
+
+@st.cache_data(show_spinner=False)
+def profile_metrics(prices, rf: float) -> dict:
+    """Metrics for every model profile (cached: depends only on prices and rf)."""
+    return {name: an.portfolio_metrics(prices, get_weights(name), rf) for name in MODEL_PORTFOLIOS}
+
+
 def pct(x: float) -> str:
     """Format a fraction as a percentage, or 'n/a' for NaN."""
     return "n/a" if x is None or x != x else f"{x:.2%}"
 
 
-def show_risk_return(data: dict, weights: dict, rf: float | None, horizon: int, investment) -> None:
+def show_risk_return(data: dict, result: RiskResult, weights: dict, tilt: int,
+                     rf: float | None, horizon: int, investment, mode: str) -> None:
     """Expected return / risk metrics, per-ETF statistics and projection summary."""
     st.subheader("Estimated return and risk (historical)")
     if data["prices"] is None:
@@ -169,12 +191,31 @@ def show_risk_return(data: dict, weights: dict, rf: float | None, horizon: int, 
     c[4].metric("Backtest growth rate (CAGR)", pct(m.backtest_cagr),
                 help="Compound annual growth actually achieved in the backtest")
     rf_res = data["rf"]
+    # "\\$" stops Streamlit's Markdown from treating text between two $ signs as LaTeX.
     st.caption(f"Risk-free rate used: {rf:.2%} ({rf_res.detail}). "
-               f"$10,000 invested at the start of the backtest would have grown to "
-               f"${m.backtest.iloc[-1]:,.0f} by {m.backtest.index[-1].date()}.")
+               f"\\$10,000 invested at the start of the backtest would have grown to "
+               f"\\${m.backtest.iloc[-1]:,.0f} by {m.backtest.index[-1].date()}.")
+
+    # Charts: growth of $10k for every profile, and risk vs. return.
+    all_m = profile_metrics(prices.data, rf)
+    tilted = tilt != 0
+    you = f"Your portfolio (tilt {tilt:+d} pts)"
+    plot(charts.growth_chart(
+        {name: pm.backtest for name, pm in all_m.items()}, highlight={result.profile}, mode=mode,
+        extra={you: m.backtest} if tilted else None,
+    ))
+    stats = an.asset_statistics(prices.data)
+    plot(charts.risk_return_scatter(
+        stats, {name: (pm.volatility, pm.expected_return) for name, pm in all_m.items()},
+        risk_free=rf, highlight=result.profile, mode=mode,
+        extra={"You (tilted)": (m.volatility, m.expected_return)} if tilted else None,
+    ))
+    st.caption("Diamonds are the three model portfolios; gray dots are the individual ETFs. "
+               "Up and to the left is better (more return per unit of risk). Diversified portfolios "
+               "sit to the left of a straight line between their holdings because the ETFs don't move "
+               "in lockstep.")
 
     with st.expander("Per-ETF historical statistics"):
-        stats = an.asset_statistics(prices.data)
         stats["Weight"] = [weights.get(t, 0.0) for t in stats.index]
         stats["Sharpe"] = (stats["Annual Return"] - rf) / stats["Annual Volatility"]
         st.dataframe(
@@ -199,9 +240,100 @@ def show_risk_return(data: dict, weights: dict, rf: float | None, horizon: int, 
     c[0].metric("Pessimistic (10th percentile)", f"${end['p10']:,.0f}")
     c[1].metric("Median (50th percentile)", f"${end['p50']:,.0f}")
     c[2].metric("Optimistic (90th percentile)", f"${end['p90']:,.0f}")
+    plot(charts.projection_fan(proj, float(investment), mode=mode, profile=result.profile))
     st.caption("Monte Carlo simulation of 2,000 paths using the portfolio's historical expected "
                "return and volatility. 80% of simulated outcomes fall between the 10th and 90th "
                "percentiles. Not a forecast or a guarantee.")
+
+# Default investors for the comparison view: a young long-horizon saver vs. a near-retiree.
+COMPARE_DEFAULTS = {
+    "A": {"label": "Investor A", "age": 25, "horizon": 40, "answer_index": 3},
+    "B": {"label": "Investor B", "age": 60, "horizon": 7, "answer_index": 1},
+}
+
+
+def compare_inputs(key: str) -> tuple:
+    """Inputs for one investor in the compare view; returns (age, horizon, answer_points)."""
+    d = COMPARE_DEFAULTS[key]
+    st.markdown(f"#### {d['label']}")
+    c1, c2 = st.columns(2)
+    age = c1.number_input("Age", MIN_AGE, MAX_AGE, d["age"], 1, key=f"cmp_age_{key}")
+    horizon = c2.number_input("Horizon (years)", MIN_HORIZON, MAX_HORIZON, d["horizon"], 1,
+                              key=f"cmp_hz_{key}")
+    with st.expander("Risk-tolerance answers", expanded=False):
+        labels = {q["key"]: st.selectbox(q["prompt"], option_labels(q), index=d["answer_index"],
+                                         key=f"cmp_{q['key']}_{key}")
+                  for q in QUESTIONS}
+    return age, horizon, labels_to_points(labels)
+
+
+def show_compare(data: dict, mode: str) -> None:
+    """Side-by-side comparison of two hypothetical investors."""
+    st.markdown("Compare two hypothetical investors side by side. Defaults: a 25-year-old with a "
+                "40-year horizon vs. a 60-year-old with a 7-year horizon. Edit either one below.")
+    cols = st.columns(2)
+    people = {}
+    for key, col in zip(("A", "B"), cols):
+        with col:
+            age, horizon, pts = compare_inputs(key)
+            errors = validate_inputs(age, horizon, pts)
+            if errors:
+                for msg in errors:
+                    st.error(msg)
+                continue
+            people[key] = (int(age), int(horizon), assess_risk(int(age), int(horizon), pts))
+
+    if len(people) < 2:
+        st.info("Fix the inputs above to see the comparison.")
+        return
+
+    prices, rf_res = data["prices"], data["rf"]
+    have_data = prices is not None and rf_res is not None
+    all_m = profile_metrics(prices.data, rf_res.data) if have_data else {}
+
+    # Summary table: one column per investor.
+    rows = {}
+    for key, (age, horizon, res) in people.items():
+        col = {"Age": str(age), "Horizon (years)": str(horizon), "Risk score": f"{res.score:.1f}",
+               "Profile": res.profile + (" (capped)" if res.capped else "")}
+        w = get_weights(res.profile)
+        stocks = sum(v for t, v in w.items() if ETF_INFO[t]["group"] == "equity")
+        col["Stocks / bonds"] = f"{stocks:.0%} / {1 - stocks:.0%}"
+        if have_data:
+            pm = all_m[res.profile]
+            col.update({
+                "Expected return": pct(pm.expected_return), "Volatility": pct(pm.volatility),
+                "Sharpe ratio": f"{pm.sharpe:.2f}", "Max drawdown": pct(pm.max_drawdown),
+            })
+        rows[COMPARE_DEFAULTS[key]["label"]] = col
+    st.dataframe(pd.DataFrame(rows), width="stretch")
+
+    cols = st.columns(2)
+    for key, col in zip(people, cols):
+        _, horizon, res = people[key]
+        with col:
+            plot(charts.allocation_donut(get_weights(res.profile), mode,
+                                         title=f"{COMPARE_DEFAULTS[key]['label']}: {res.profile}"))
+
+    if not have_data:
+        st.error("Return and risk comparisons need price data and a risk-free rate, which are unavailable.")
+        return
+
+    profiles = {res.profile for _, _, res in people.values()}
+    plot(charts.growth_chart({n: pm.backtest for n, pm in all_m.items()}, highlight=profiles, mode=mode,
+                             title="Historical growth of $10,000 — both investors' profiles highlighted"))
+
+    cols = st.columns(2)
+    for key, col in zip(people, cols):
+        _, horizon, res = people[key]
+        pm = all_m[res.profile]
+        proj = an.monte_carlo_projection(10_000.0, pm.expected_return, pm.volatility, horizon)
+        with col:
+            plot(charts.projection_fan(proj, 10_000.0, mode=mode, profile=res.profile,
+                                       title=f"{COMPARE_DEFAULTS[key]['label']}: $10,000 over {horizon} years"))
+    st.caption("Same model, same historical data: the difference comes from horizon and risk tolerance. "
+               "A longer horizon gives more time to recover from drawdowns, which is why the scoring "
+               "gives it weight.")
 
 
 def show_assumptions(data: dict) -> None:
@@ -264,6 +396,7 @@ def main() -> None:
     answer_points = labels_to_points(answer_labels)
     data = load_data()
     show_data_status(data)
+    mode = theme_mode()
 
     tab_mine, tab_compare, tab_assumptions = st.tabs(
         ["My Portfolio", "Compare Profiles", "Assumptions & Methodology"]
@@ -272,9 +405,8 @@ def main() -> None:
     with tab_mine:
         errors = validate_inputs(age, horizon, answer_points)
         if errors:
-            st.info("Complete the questionnaire in the sidebar to see your profile.")
-            for msg in errors:
-                st.error(msg)
+            st.info("👈 Complete the questionnaire in the sidebar to see your profile. Still needed:\n"
+                    + "\n".join(f"- {msg}" for msg in errors))
         else:
             result = assess_risk(int(age), int(horizon), answer_points)
 
@@ -293,16 +425,21 @@ def main() -> None:
             table = allocation_table(weights)
             if data["quotes"] is not None:
                 q = data["quotes"].data
-                table["Current Price ($)"] = table["Ticker"].map(q["price"]).round(2)
+                table["Current Price"] = [
+                    "n/a" if p != p else f"${p:,.2f}" for p in table["Ticker"].map(q["price"])
+                ]
                 table["Price Source"] = table["Ticker"].map(q["source"])
-            st.dataframe(table, hide_index=True, width="stretch",
-                         column_config={"Current Price ($)": st.column_config.NumberColumn(format="$%.2f")})
+            left, right = st.columns([3, 2])
+            with left:
+                st.dataframe(table, hide_index=True, width="stretch")
+            with right:
+                plot(charts.allocation_donut(weights, mode, title=f"{result.profile} allocation"))
 
             rf = data["rf"].data if data["rf"] is not None else None
-            show_risk_return(data, weights, rf, int(horizon), investment)
+            show_risk_return(data, result, weights, tilt, rf, int(horizon), investment, mode)
 
     with tab_compare:
-        st.info("Side-by-side profile comparison will be added in stage 4.")
+        show_compare(data, mode)
 
     with tab_assumptions:
         show_assumptions(data)
