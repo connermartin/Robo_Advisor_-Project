@@ -6,7 +6,9 @@ Run with:  streamlit run app.py
 
 import streamlit as st
 
+from src import analytics as an
 from src.data_fetch import (
+    LOOKBACK_YEARS,
     SRC_LIVE,
     SRC_SAMPLE,
     clear_caches,
@@ -16,14 +18,18 @@ from src.data_fetch import (
 )
 from src.portfolios import ALL_TICKERS, MAX_TILT, allocation_table, get_weights
 from src.questionnaire import (
+    DEFAULT_INVESTMENT,
     MAX_AGE,
     MAX_HORIZON,
+    MAX_INVESTMENT,
     MIN_AGE,
     MIN_HORIZON,
+    MIN_INVESTMENT,
     QUESTIONS,
     labels_to_points,
     option_labels,
     validate_inputs,
+    validate_investment,
 )
 from src.risk_profile import assess_risk
 
@@ -38,7 +44,10 @@ st.set_page_config(page_title="Robo-Advisor (Educational)", page_icon="📈", la
 
 
 def sidebar_questionnaire() -> tuple:
-    """Render the questionnaire in the sidebar and return (age, horizon, answer_labels, tilt)."""
+    """Render the questionnaire in the sidebar.
+
+    Returns (age, horizon, answer_labels, tilt, investment).
+    """
     st.sidebar.header("Your Profile")
     age = st.sidebar.number_input(
         "Age", min_value=MIN_AGE, max_value=MAX_AGE, value=None, step=1,
@@ -61,12 +70,16 @@ def sidebar_questionnaire() -> tuple:
             answers[q["key"]] = choice
 
     st.sidebar.subheader("Optional")
+    investment = st.sidebar.number_input(
+        "Starting investment ($)", min_value=MIN_INVESTMENT, max_value=MAX_INVESTMENT,
+        value=DEFAULT_INVESTMENT, step=1_000, help="Used only for the growth projection.",
+    )
     tilt = st.sidebar.slider(
         "Tilt within profile (percentage points toward stocks)",
         min_value=-MAX_TILT, max_value=MAX_TILT, value=0, step=1,
         help="Negative = more bonds, positive = more stocks. Weight moves proportionally.",
     )
-    return age, horizon, answers, tilt
+    return age, horizon, answers, tilt, investment
 
 
 def load_data() -> dict:
@@ -124,12 +137,130 @@ def show_data_status(data: dict) -> None:
         st.warning("**Data notice — some live data is unavailable, so fallbacks are in use:**\n"
                    + "\n".join(f"- {n}" for n in notes))
 
+def pct(x: float) -> str:
+    """Format a fraction as a percentage, or 'n/a' for NaN."""
+    return "n/a" if x is None or x != x else f"{x:.2%}"
+
+
+def show_risk_return(data: dict, weights: dict, rf: float | None, horizon: int, investment) -> None:
+    """Expected return / risk metrics, per-ETF statistics and projection summary."""
+    st.subheader("Estimated return and risk (historical)")
+    if data["prices"] is None:
+        st.error("Return and risk can't be estimated because no price data is available.")
+        return
+    if rf is None:
+        st.error("Risk-free rate is unavailable, so the Sharpe ratio can't be computed.")
+        return
+
+    prices = data["prices"]
+    if prices.source == SRC_SAMPLE and "SYNTHETIC" in prices.detail:
+        st.caption("⚠️ Figures below are computed from SYNTHETIC sample prices, not real ETF history.")
+
+    m = an.portfolio_metrics(prices.data, weights, rf)
+    c = st.columns(5)
+    c[0].metric("Expected return (annual)", pct(m.expected_return),
+                help="Weighted average of each ETF's historical mean annual return: w · μ")
+    c[1].metric("Volatility (annual)", pct(m.volatility),
+                help="Portfolio standard deviation including correlations: √(w′Σw)")
+    c[2].metric("Sharpe ratio", "n/a" if m.sharpe != m.sharpe else f"{m.sharpe:.2f}",
+                help=f"(Expected return − risk-free rate {rf:.2%}) ÷ volatility")
+    c[3].metric("Max drawdown (backtest)", pct(m.max_drawdown),
+                help="Worst peak-to-trough fall of the monthly-rebalanced historical backtest")
+    c[4].metric("Backtest growth rate (CAGR)", pct(m.backtest_cagr),
+                help="Compound annual growth actually achieved in the backtest")
+    rf_res = data["rf"]
+    st.caption(f"Risk-free rate used: {rf:.2%} ({rf_res.detail}). "
+               f"$10,000 invested at the start of the backtest would have grown to "
+               f"${m.backtest.iloc[-1]:,.0f} by {m.backtest.index[-1].date()}.")
+
+    with st.expander("Per-ETF historical statistics"):
+        stats = an.asset_statistics(prices.data)
+        stats["Weight"] = [weights.get(t, 0.0) for t in stats.index]
+        stats["Sharpe"] = (stats["Annual Return"] - rf) / stats["Annual Volatility"]
+        st.dataframe(
+            stats, width="stretch",
+            column_config={
+                "Annual Return": st.column_config.NumberColumn(format="percent"),
+                "Annual Volatility": st.column_config.NumberColumn(format="percent"),
+                "Weight": st.column_config.NumberColumn(format="percent"),
+                "Sharpe": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+    st.subheader(f"Projected value of ${investment:,.0f} over {horizon} years")
+    errors = validate_investment(investment)
+    if errors:
+        for msg in errors:
+            st.error(msg)
+        return
+    proj = an.monte_carlo_projection(float(investment), m.expected_return, m.volatility, horizon)
+    end = proj.iloc[-1]
+    c = st.columns(3)
+    c[0].metric("Pessimistic (10th percentile)", f"${end['p10']:,.0f}")
+    c[1].metric("Median (50th percentile)", f"${end['p50']:,.0f}")
+    c[2].metric("Optimistic (90th percentile)", f"${end['p90']:,.0f}")
+    st.caption("Monte Carlo simulation of 2,000 paths using the portfolio's historical expected "
+               "return and volatility. 80% of simulated outcomes fall between the 10th and 90th "
+               "percentiles. Not a forecast or a guarantee.")
+
+
+def show_assumptions(data: dict) -> None:
+    """Assumptions & methodology tab."""
+    prices = data["prices"]
+    if prices is not None:
+        idx = prices.data.index
+        period = (f"{idx[0].date()} to {idx[-1].date()} ({len(idx)} trading days, "
+                  f"source: {prices.source} — {prices.detail})")
+    else:
+        period = "unavailable"
+    rf = data["rf"]
+    rf_text = f"{rf.data:.2%} ({rf.source}: {rf.detail})" if rf is not None else "unavailable"
+
+    st.markdown(f"""
+### Data
+- **Lookback period:** up to the last {LOOKBACK_YEARS} years of daily prices. Current data: {period}.
+- **Prices:** adjusted closing prices (include dividends/distributions) from Yahoo Finance via yfinance.
+  If unavailable, a saved copy or the bundled sample file is used, and the app says so.
+- **Risk-free rate:** latest 3-month U.S. Treasury bill yield (FRED series DGS3MO). Current value: {rf_text}.
+  If FRED is unavailable, a default of 4.00% is used and labeled as an assumption.
+- **Current prices:** Finnhub real-time quotes (free tier), shown for reference only; they are not used in any calculation.
+
+### Calculations
+| Metric | Formula | Plain English |
+|---|---|---|
+| Daily return | r = Pₜ / Pₜ₋₁ − 1 | Percent change in price from one day to the next |
+| Annual return (per ETF) | mean(daily r) × 252 | Average daily return scaled to a year (252 trading days) |
+| Annual volatility (per ETF) | stdev(daily r) × √252 | How much returns typically swing around their average |
+| Covariance matrix Σ | cov(daily r) × 252 | How the ETFs move together |
+| Portfolio expected return | w · μ | Weighted average of the ETFs' returns |
+| Portfolio volatility | √(w′Σw) | Portfolio risk; lower than the weighted average when ETFs don't move in lockstep (diversification) |
+| Sharpe ratio | (Rₚ − R_f) / σₚ | Extra return earned per unit of risk taken |
+| Max drawdown | min(Vₜ / max(V₀…Vₜ) − 1) | Worst fall from a previous high in the backtest |
+| CAGR | (V_end / V_start)^(1/years) − 1 | Steady yearly growth rate that would give the same result |
+
+### Assumptions
+- **Annualization:** 252 trading days per year.
+- **Rebalancing:** expected return and volatility assume the target weights are held constant.
+  The historical backtest rebalances back to target weights at the end of every month.
+- **No costs:** fund expense ratios are already reflected in ETF prices, but trading costs, taxes,
+  and bid/ask spreads are ignored.
+- **Projection:** 2,000 simulated paths; each year's return is drawn independently from a
+  lognormal distribution with the portfolio's expected annual return and volatility.
+  No additional contributions or withdrawals. Bands show the 10th, 50th, and 90th percentiles.
+- **Normality:** real markets have "fat tails" — extreme losses happen more often than these models assume.
+
+### ⚠️ Past performance does not predict future results
+All figures are estimates from historical data over one specific period. Future returns,
+volatility, and correlations will differ — sometimes substantially. This is an educational
+illustration, not personalized investment advice.
+""")
+
 
 def main() -> None:
     st.title("📈 AI Robo-Advisor & Portfolio Recommendation Tool")
     st.warning(DISCLAIMER)
 
-    age, horizon, answer_labels, tilt = sidebar_questionnaire()
+    age, horizon, answer_labels, tilt, investment = sidebar_questionnaire()
     answer_points = labels_to_points(answer_labels)
     data = load_data()
     show_data_status(data)
@@ -167,18 +298,14 @@ def main() -> None:
             st.dataframe(table, hide_index=True, width="stretch",
                          column_config={"Current Price ($)": st.column_config.NumberColumn(format="$%.2f")})
 
-            if data["rf"] is not None:
-                rf = data["rf"]
-                st.metric("Risk-free rate (3-month T-bill)", f"{rf.data:.2%}", help=rf.detail)
-                if rf.source != SRC_LIVE:
-                    st.caption(f"Risk-free rate source: {rf.source} ({rf.detail}).")
-            st.caption("Charts, expected return and risk metrics arrive in later stages.")
+            rf = data["rf"].data if data["rf"] is not None else None
+            show_risk_return(data, weights, rf, int(horizon), investment)
 
     with tab_compare:
         st.info("Side-by-side profile comparison will be added in stage 4.")
 
     with tab_assumptions:
-        st.info("Assumptions and methodology will be added in stage 3.")
+        show_assumptions(data)
 
 
 main()

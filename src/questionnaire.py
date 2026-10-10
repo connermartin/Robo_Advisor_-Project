@@ -12,6 +12,8 @@ MIN_AGE, MAX_AGE = 18, 100
 MIN_HORIZON, MAX_HORIZON = 1, 50
 # Sanity check: age + horizon should not run past a plausible lifetime.
 MAX_AGE_PLUS_HORIZON = 110
+# Starting amount for the growth projection (dollars).
+MIN_INVESTMENT, MAX_INVESTMENT, DEFAULT_INVESTMENT = 1_000, 10_000_000, 10_000
 
 # Each question: a unique key, the prompt shown to the user, and a list of
 # (answer label, points) pairs ordered from most cautious (0) to most tolerant (4).
@@ -149,3 +151,12 @@ def validate_inputs(age, horizon, answers: dict | None) -> list[str]:
             errors.append(f"Invalid answer for: “{q['prompt']}”")
 
     return errors
+
+
+def validate_investment(amount) -> list[str]:
+    """Validate the starting investment used for the projection; return error messages."""
+    if amount is None or isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return ["Please enter a starting investment amount."]
+    if not MIN_INVESTMENT <= amount <= MAX_INVESTMENT:
+        return [f"Starting investment must be between ${MIN_INVESTMENT:,} and ${MAX_INVESTMENT:,}."]
+    return []

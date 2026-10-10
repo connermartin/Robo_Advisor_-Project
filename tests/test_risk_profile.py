@@ -7,7 +7,13 @@ Expected values are worked out by hand from the documented formula:
 import pytest
 
 from src.portfolios import MODEL_PORTFOLIOS, get_weights
-from src.questionnaire import QUESTIONS, labels_to_points, points_for, validate_inputs
+from src.questionnaire import (
+    QUESTIONS,
+    labels_to_points,
+    points_for,
+    validate_inputs,
+    validate_investment,
+)
 from src.risk_profile import assess_risk, horizon_points, score_to_profile, tolerance_points
 
 KEYS = [q["key"] for q in QUESTIONS]
@@ -123,6 +129,12 @@ def test_points_for_unknown_label_raises():
 def test_labels_to_points_roundtrip():
     labels = {q["key"]: q["options"][3][0] for q in QUESTIONS}
     assert labels_to_points(labels) == {k: 3 for k in KEYS}
+
+
+@pytest.mark.parametrize("amount, ok", [(10_000, True), (1_000, True), (10_000_000, True),
+                                        (999, False), (20_000_000, False), (None, False), ("5000", False)])
+def test_validate_investment(amount, ok):
+    assert (validate_investment(amount) == []) is ok
 
 
 # ---------- model portfolios ----------
