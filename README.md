@@ -253,29 +253,29 @@ python -m pytest -v
 
 ## How the AI coding agent was used
 
-> _Template: complete this section yourself._
+> The AI agent did most of the work for me. Claude Code made this website just from a prompt that I created through the software. Claude would periodically ask me questions for clarification if it needed my feedback. The agent went into Github and Streamlit and coded the website for me. 
 
-**Tool(s) used:** _e.g. Claude Code (AI coding agent)_
+**Tool(s) used:** Claude Code, Github, Streamlit, FRED, Finnhub, and Apple Terminal
 
 **How I worked with it:**
-- _e.g. I wrote a detailed spec, asked for a plan first, and approved it before any code was written._
-- _e.g. I had it build in 5 stages and tested each stage before moving on._
+- _e.g. I gave the AI an extremely detailed prompt and let it run its course. The AI would give me questions for things that it didn't have access to or didn't know. I had to manually put in some commands with Apple Terminal.
+  
 
 **What the agent did:**
 - _e.g. Scaffolded the project, wrote the modules and tests, researched which Finnhub endpoints are free._
 
 **What I did / decided myself:**
-- _e.g. Chose the scoring weights, portfolio allocations, and ETF universe._
-- _e.g. Ran the app with real API keys and checked the numbers against published ETF data._
+- I decided what the app would measure and what AI to use for this project. 
+
 
 **Something the agent got wrong or I changed:**
-- _…_
+- The agent told me to install the wrong Python application for this website. Besides that misstep, it was perfect.
 
 **What I verified independently:**
-- _e.g. Hand-checked the portfolio volatility and Sharpe formulas against the course notes._
+- I verified all of the inputs that Claude asked me to check on the website. I also verfied all of the FRED and Finnhub data that Claude used. 
 
 **Reflection: benefits and risks of using an AI agent for financial software:**
-- _…_
+- The best thing is the convenience of letting AI deal with finance. The AI is extremely fast and helpful. Using an AI for robo-advisory is also cost-effective. The bad thing is the risk of the AI giving inaccurate data or the risk of an attack. 
 
 ## Known limitations and incomplete features
 
