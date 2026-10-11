@@ -50,11 +50,9 @@ gracefully when it is unavailable.
 
 ## Screenshots
 
-> _Add at least two screenshots to the `screenshots/` folder and update the links below._
-
 | My Portfolio | Compare Profiles |
 |---|---|
-| <!-- ![My Portfolio](screenshots/my_portfolio.png) --> _screenshot placeholder_ | <!-- ![Compare Profiles](screenshots/compare_profiles.png) --> _screenshot placeholder_ |
+| ![My Portfolio](screenshots/my_portfolio.png) | ![Compare Profiles](screenshots/compare_profiles.png) |
 
 <!-- Optional extra screenshots:
 ![Risk vs return](screenshots/risk_return.png)
