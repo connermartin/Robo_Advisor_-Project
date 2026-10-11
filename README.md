@@ -258,11 +258,11 @@ python -m pytest -v
 **Tool(s) used:** Claude Code, Github, Streamlit, FRED, Finnhub, and Apple Terminal
 
 **How I worked with it:**
-- _e.g. I gave the AI an extremely detailed prompt and let it run its course. The AI would give me questions for things that it didn't have access to or didn't know. I had to manually put in some commands with Apple Terminal.
+- I gave the AI an extremely detailed prompt and let it run its course. The AI would give me questions for things that it didn't have access to or didn't know. I had to manually put in some commands with Apple Terminal.
   
 
 **What the agent did:**
-- _e.g. Scaffolded the project, wrote the modules and tests, researched which Finnhub endpoints are free._
+- The agent found all of the software to use as well as code the whole website.
 
 **What I did / decided myself:**
 - I decided what the app would measure and what AI to use for this project. 
