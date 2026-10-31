@@ -1,0 +1,82 @@
+# Trading system configuration. Every hard limit lives here.
+# Rule changes require explicit owner approval; the agent never edits limits on its own.
+
+status:
+  mode: setup                 # setup -> backtest -> dry_run -> live -> halted
+  live_approved: false        # flips only after the owner types "go live"
+  kill_switch_engaged: false  # set true by the 50% drawdown tier; only the owner may reset it
+
+account:
+  broker: robinhood
+  nickname: MCP
+  broker_account_type: limited_margin   # owner chose to keep it; operated as a cash account
+  operate_as_cash_account: true
+  funded: false
+  starting_equity: null       # recorded on the day the account is funded
+  high_water_mark: null       # = starting_equity at funding; updated after each close at a new high
+
+allocation:
+  stocks_target_pct: 70       # core + swing sleeves
+  crypto_target_pct: 30
+  rebalance_drift_pts: 10     # rebalance when either side drifts more than 10 points
+  sleeves:
+    core_growth_pct: 40
+    swing_momentum_pct: 30
+    crypto_pct: 30
+  crypto:
+    btc_eth_min_share_of_sleeve: 0.667
+    altcoin_max_share_of_sleeve: 0.333
+
+instruments:
+  allowed: [us_stocks, us_etfs, crypto]
+  forbidden: [options, futures, margin, shorting, leveraged_etfs, inverse_etfs, otc, penny_stocks]
+  stock_universe_filters:
+    min_price_usd: 5
+    min_market_cap_usd: 2000000000
+    min_avg_daily_volume_shares: 1000000
+  crypto_universe: [BTC, ETH]   # altcoins added only if large-cap and liquid; listed in strategy.md
+
+risk_limits:                  # HARD LIMITS: never overridden, even on a strong signal
+  max_risk_per_trade_pct: 3.0         # (entry - stop) x shares <= 3% of equity
+  max_position_pct_stock: 20.0
+  max_position_pct_altcoin: 15.0
+  max_open_positions: 8
+  max_new_entries_per_day: 3
+  stop_required_at_entry: true
+  stop_may_only_move_up: true
+  stops_placed_at_broker: true        # stop orders rest at Robinhood between scheduled runs
+  earnings_in_holding_window: half_size_or_skip
+  drawdown_tiers:                     # measured from high_water_mark
+    warn_and_halve_size_pct: 25
+    kill_switch_pct: 50               # close all, stop trading, notify, wait for owner
+  settled_cash_only_for_buys: true
+  stock_settlement_days: 1            # T+1
+  no_margin: true
+  no_options: true
+  no_leverage: true
+  no_shorting: true
+  no_deposits_or_withdrawals: true
+  no_account_setting_changes: true
+  on_bad_data_or_order_error: do_nothing_and_log
+  max_quote_age_seconds: 300          # older quotes are treated as stale
+  day_trades: rare_exception          # margin-type account under $25k: pattern-day-trader limits may apply
+
+execution:
+  entry_order_type: limit
+  exit_order_type: limit_or_stop      # market only when a stop triggers
+  limit_offset_bps: 10                # limit price vs. last quote
+
+schedule:                             # times in US Eastern
+  stock_checks: ["09:00 pre-open", "12:30 mid-day", "16:15 after close"]
+  crypto_checks: ["08:00", "14:00", "20:00"]   # every day, including weekends
+
+dry_run:
+  length_trading_days: 10
+  assumed_starting_equity_usd: 3000   # hypothetical; replaced by real equity when funded
+
+reporting:
+  journal: trade_journal.md
+  equity_log: equity_log.csv
+  daily_summary_lines: 5
+  weekly_report: true
+  benchmarks: [QQQ, BTC]
